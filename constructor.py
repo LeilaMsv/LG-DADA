@@ -10,21 +10,47 @@ from preprocessing import preprocess_graph, sparse_to_tuple, construct_feed_dict
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 
-def get_placeholder(adj):
+# def get_placeholder(adj, input_dim):
+#     placeholders = {
+#         'features': tf.sparse_placeholder(tf.float32),
+#         'adj': tf.sparse_placeholder(tf.float32),
+#         'adj_orig': tf.sparse_placeholder(tf.float32),
+#         'dropout': tf.placeholder_with_default(0., shape=()),
+#         'real_distribution': tf.placeholder(dtype=tf.float32, shape=[adj.shape[0], FLAGS.hidden2], name='real_distribution'),
+#         #'real_dist_TV': tf.placeholder(dtype=tf.float32, shape=[adj.shape[0]-1, 595], name='real_dist_TV'),
+        
+#         'real_dist_TV': tf.placeholder(dtype=tf.float32, shape=[adj.shape[0]-1, input_dim], name='real_dist_TV'),
+
+#         'fake_dist_for_d2' : tf.placeholder(dtype=tf.float32, name="fake_dist_for_d2")
+#     }
+
+#     return placeholders
+
+
+
+# 2 oct
+def get_placeholder(adj, input_dim):
     placeholders = {
         'features': tf.sparse_placeholder(tf.float32),
         'adj': tf.sparse_placeholder(tf.float32),
         'adj_orig': tf.sparse_placeholder(tf.float32),
         'dropout': tf.placeholder_with_default(0., shape=()),
-        'real_distribution': tf.placeholder(dtype=tf.float32, shape=[adj.shape[0], FLAGS.hidden2], name='real_distribution'),
-        'real_dist_TV': tf.placeholder(dtype=tf.float32, shape=[adj.shape[0]-1, 595], name='real_dist_TV'),
-        'fake_dist_for_d2' : tf.placeholder(dtype=tf.float32, name="fake_dist_for_d2")
+        # Flexible batch dimension so train (n_train) and train+test (n_train+1) both work
+        'real_distribution': tf.placeholder(tf.float32, shape=[None, FLAGS.hidden2], name='real_distribution'),
+        'real_dist_TV':      tf.placeholder(tf.float32, shape=[None, input_dim],     name='real_dist_TV'),
+        'fake_dist_for_d2':  tf.placeholder(tf.float32, shape=[None, input_dim],     name='fake_dist_for_d2'),
     }
-
     return placeholders
 
-def get_model_2(model_str, placeholders, num_features, num_nodes, features_nonzero):
-    discriminator2 = Discriminator2()
+
+
+
+
+
+def get_model_2(model_str, placeholders, num_features, num_nodes, features_nonzero, input_dim):
+    #discriminator2 = Discriminator2(input_dim=num_features)
+    discriminator2 = Discriminator2(input_dim=input_dim)
+
     d_real_TV = discriminator2.construct(placeholders['real_dist_TV'])
     model = None
     if model_str == 'arga_ae':
@@ -36,15 +62,24 @@ def get_model_2(model_str, placeholders, num_features, num_nodes, features_nonze
     return d_real_TV, discriminator2, model
 
 
-def get_model(model_str, placeholders, num_features, num_nodes, features_nonzero):
-    discriminator = Discriminator()
-    d_real = discriminator.construct(placeholders['real_distribution'])
+def get_model(model_str, placeholders, num_features, num_nodes, features_nonzero, input_dim):
+    #discriminator = Discriminator(input_dim=num_features)
+    discriminator = Discriminator(input_dim=input_dim)
+
+    #d_real = discriminator.construct(placeholders['real_distribution'])
+
+    #d_real = discriminator.construct(placeholders['real_distribution'], FLAGS.hidden2)
+    d_real = discriminator.construct(placeholders['real_distribution'], input_dim=FLAGS.hidden2)
+
+
+
+
     model = None
     if model_str == 'arga_ae':
-        model = ARGA(placeholders, num_features, features_nonzero)
+        model = ARGA(placeholders, num_features, features_nonzero, input_dim=input_dim)
 
     elif model_str == 'arga_vae':
-        model = ARVGA(placeholders, num_features, num_nodes, features_nonzero)
+        model = ARVGA(placeholders, num_features, num_nodes, features_nonzero, input_dim=input_dim)
 
     return d_real, discriminator, model
 
@@ -120,7 +155,7 @@ def get_optimizer(model_str, model, discriminator, placeholders, pos_weight, nor
 
 #emb, avg_cost = update(ae_model, opt, sess, feas['adj_norm'], feas['adj_label'], feas['features'], placeholders, feas['adj'])
 
-def update(model, opt, sess, adj_norm, adj_label, features, placeholders, adj, prior, hiddenSIMLR, new_fake_d):
+def update(model, opt, sess, adj_norm, adj_label, features, placeholders, adj, prior, hiddenSIMLR, new_fake_d, input_dim):
     # Construct feed dictionary
     feed_dict = construct_feed_dict(adj_norm, adj_label, features, placeholders)
     feed_dict.update({placeholders['dropout']: FLAGS.dropout})
@@ -136,7 +171,9 @@ def update(model, opt, sess, adj_norm, adj_label, features, placeholders, adj, p
         z_real_dist_prior = np.random.normal(mu, sigma, (adj.shape[0], FLAGS.hidden2))
         feed_dict.update({placeholders['real_distribution']: z_real_dist_prior})
     else:
-        z_real_dist_prior = np.random.normal(mu, sigma, (prior.shape[0], 595))
+        #!!!!
+        z_real_dist_prior = np.random.normal(mu, sigma, (prior.shape[0], input_dim))
+        
         feed_dict.update({placeholders['real_dist_TV']: z_real_dist_prior})
         feed_dict.update({placeholders['fake_dist_for_d2']: new_fake_d})
 

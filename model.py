@@ -7,7 +7,9 @@ FLAGS = flags.FLAGS
 
 class Model(object):
     def __init__(self, **kwargs):
-        allowed_kwargs = {'name', 'logging'}
+        #allowed_kwargs = {'name', 'logging'}
+        allowed_kwargs = {'name', 'logging', 'input_dim'}
+
         for kwarg in kwargs.keys():
             assert kwarg in allowed_kwargs, 'Invalid keyword argument: ' + kwarg
 
@@ -76,10 +78,29 @@ class ARGA(Model):
                                            name='e_dense_2')(self.noise)
             
             self.z_mean = self.embeddings
-                       
-            self.reconstructions = InnerProductDecoder(input_dim=FLAGS.hidden2,
-                                          act=lambda x: x,
-                                          logging=self.logging)(self.embeddings)
+
+        
+            
+
+            self.reconstructions = InnerProductDecoder(
+                input_dim=FLAGS.hidden2,
+                act=lambda x: x,
+                logging=self.logging)(self.embeddings)
+
+
+
+
+        # Newly Added:  shape prints here
+        print("ARGA Hidden1 shape:", self.hidden1.shape)
+        print("ARGA Embeddings (Z) shape:", self.embeddings.shape)
+        print("ARGA Reconstructions shape:", self.reconstructions.shape)
+
+
+        # newly:   to print in Demo
+        self.hidden1_shape = tf.shape(self.hidden1)
+        self.embedding_shape = tf.shape(self.embeddings)
+        self.recon_shape = tf.shape(self.reconstructions)
+
 
 
 
@@ -126,10 +147,25 @@ class ARVGA(Model):
 
             self.z = self.z_mean + tf.random_normal([self.n_samples, FLAGS.hidden2]) * tf.exp(self.z_log_std)
 
-            self.reconstructions = InnerProductDecoder(input_dim=FLAGS.hidden2,
-                                          act=lambda x: x,
-                                          logging=self.logging)(self.z)
+
+           
+            
+
+            self.reconstructions = InnerProductDecoder(
+            input_dim=FLAGS.hidden2,
+            act=lambda x: x,
+            logging=self.logging)(self.z)
+            
             self.embeddings = self.z
+
+           
+
+
+
+        # Newly Added: shape prints here
+        print("ARVGA Hidden1 shape:", self.hidden1.shape)
+        print("ARVGA Embeddings (Z) shape:", self.embeddings.shape)
+        print("ARVGA Reconstructions shape:", self.reconstructions.shape)
 
 
 def dense(x, n1, n2, name):
@@ -152,44 +188,104 @@ def dense(x, n1, n2, name):
         return out
 
 
-class Discriminator(Model):
-    def __init__(self, **kwargs):
-        super(Discriminator, self).__init__(**kwargs)
 
+class Discriminator(Model):
+    def __init__(self, input_dim, **kwargs):
+        super(Discriminator, self).__init__(**kwargs)
+        self.input_dim = input_dim
         self.act = tf.nn.relu
 
-    def construct(self, inputs, reuse = False):
-        # with tf.name_scope('Discriminator'):
+
+    def construct(self, inputs, input_dim=None, reuse=False):
+        if input_dim is not None:
+            self.input_dim = input_dim  # dynamically override
+
         with tf.variable_scope('Discriminator'):
             if reuse:
                 tf.get_variable_scope().reuse_variables()
-            # np.random.seed(1)
             tf.set_random_seed(1)
-            #print("model.py: ", inputs)
-            dc_den1 = tf.nn.relu(dense(inputs, FLAGS.hidden2, FLAGS.hidden3, name='dc_den1'))
+
+            dc_den1 = tf.nn.relu(dense(inputs, self.input_dim, FLAGS.hidden3, name='dc_den1'))
             dc_den2 = tf.nn.relu(dense(dc_den1, FLAGS.hidden3, FLAGS.hidden1, name='dc_den2'))
             output = dense(dc_den2, FLAGS.hidden1, 1, name='dc_output')
-            #print("model.py: ", output)
             return output
-        
-class Discriminator2(Model):
-    def __init__(self, **kwargs):
-        super(Discriminator2, self).__init__(**kwargs)
 
+
+
+    # def construct(self, inputs, reuse=False):
+    #     with tf.variable_scope('Discriminator'):
+    #         if reuse:
+    #             tf.get_variable_scope().reuse_variables()
+    #         tf.set_random_seed(1)
+
+            
+    #         dc_den1 = tf.nn.relu(dense(inputs, self.input_dim, FLAGS.hidden3, name='dc_den1'))
+
+
+    #         dc_den2 = tf.nn.relu(dense(dc_den1, FLAGS.hidden3, FLAGS.hidden1, name='dc_den2'))
+    #         output = dense(dc_den2, FLAGS.hidden1, 1, name='dc_output')
+    #         return output
+
+
+
+
+
+
+        
+# class Discriminator2(Model):
+#     def __init__(self, input_dim, **kwargs):
+#         super(Discriminator2, self).__init__(**kwargs)
+#         self.input_dim = input_dim
+
+#         self.act = tf.nn.relu
+
+#     def construct(self, inputs, reuse = False):
+#         # with tf.name_scope('Discriminator'):
+#         with tf.variable_scope('Discriminator2'):
+#             if reuse:
+#                 tf.get_variable_scope().reuse_variables()
+#             # np.random.seed(1)
+#             tf.set_random_seed(1)
+
+            
+#             dc_den1 = tf.nn.relu(dense(inputs, self.input_dim, FLAGS.hidden3, name='dc2_den1'))
+
+          
+
+
+
+#             dc_den2 = tf.nn.relu(dense(dc_den1, FLAGS.hidden3, FLAGS.hidden1, name='dc2_den2'))
+#             output = dense(dc_den2, FLAGS.hidden1, 1, name='dc2_output')
+#             return output
+            
+
+#  2 OCT
+class Discriminator2(Model):
+    def __init__(self, input_dim, **kwargs):
+        super(Discriminator2, self).__init__(**kwargs)
+        self.input_dim = input_dim
         self.act = tf.nn.relu
 
-    def construct(self, inputs, reuse = False):
-        # with tf.name_scope('Discriminator'):
+    def construct(self, inputs, input_dim=None, reuse=False):
+        # Allow dynamic override of input_dim (mirrors Discriminator)
+        if input_dim is not None:
+            self.input_dim = input_dim
+
         with tf.variable_scope('Discriminator2'):
             if reuse:
                 tf.get_variable_scope().reuse_variables()
-            # np.random.seed(1)
             tf.set_random_seed(1)
-            dc_den1 = tf.nn.relu(dense(inputs, 595, FLAGS.hidden3, name='dc2_den1'))
+
+            dc_den1 = tf.nn.relu(dense(inputs, self.input_dim, FLAGS.hidden3, name='dc2_den1'))
             dc_den2 = tf.nn.relu(dense(dc_den1, FLAGS.hidden3, FLAGS.hidden1, name='dc2_den2'))
             output = dense(dc_den2, FLAGS.hidden1, 1, name='dc2_output')
             return output
-            
+
+
+
+
+
+
 def gaussian_noise_layer(input_layer, std):
     noise = tf.random_normal(shape=tf.shape(input_layer), mean=0.0, stddev=std, dtype=tf.float32)
     return input_layer + noise       

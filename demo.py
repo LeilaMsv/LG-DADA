@@ -1,42 +1,6 @@
 #!/usr/bin/python
 # -*- coding: utf8 -*-
 
-    """
-    Main function of Learning-guided Graph Dual Adversarial Domain Alignment (LG-DADA)framework
-    for predicting a target brain graph from a source brain graph.
-    
-    The original paper can be found in: https://www.sciencedirect.com/science/article/pii/S1361841520302668
-    Alaa Bessadok, Mohamed Ali Mahjoub, and Islem Rekik. "Brain graph synthesis by dual adversarial domain alignment
-    and target graph prediction from a source graph", Medical Image Analysis Journal 2020.
-    ---------------------------------------------------------------------
-    
-    This file contains the implementation of four key steps of our LG-DADA framework:
-    (1) feature extraction and clustering, (2) adversarial domain alignment, (3) dual adversarial regularization and (4) target graph prediction.
-        main(sourceGraph,targetGraph,labels,settings)
-                Inputs:
-                        sourceGraph: (n × m) matrix stacking the source graphs of all subjects
-                                     n the total number of subjects
-                                     m the number of features
-                        targetGraph: (n × m) matrix stacking the target graphs of all subjects
-                                     n the total number of subjects
-                                     m the number of features
-                        settings:    store the neural network settings such as the dimension of the embedded graphs
-                                     and the type of autoencoder we choosed (variational or simple autoencoder)
-                Output:
-                        predicted_target_graphs: (n × m) matrix stacking the the predicted target graphs
-                        
-    
-    To evaluate our framework we used Leave-One-Out crossvalidation strategy.
-        
-     Sample use:
-     dataset_predicted_target = main(sourceGraph,targetGraph,settings)
-    
-    ---------------------------------------------------------------------
-    Copyright 2020 Alaa Bessadok, Sousse University.
-    Please cite the above paper if you use this code.
-    All rights reserved.
-    """
-
 import tensorflow as tf
 from scipy import stats
 from math import exp
@@ -51,12 +15,48 @@ from sklearn.metrics import mean_absolute_error
 
 start = time.time()
 
-def main(sourceGraph,targetGraph,settings):
-    # initialisation
-    subject = 150
-    overallResult_PCC = np.zeros((subject,32))
-    overallResult_TSW = np.zeros((subject,32))
-    predictedTargetGraph = np.empty((0,targetGraph.shape[1]), int)
+def main(sourceGraph,targetGraph,settings, num_subjects, num_features):
+
+    # 2 Oct
+    sourceGraph = sourceGraph.astype(np.float32, copy=False)
+    targetGraph = targetGraph.astype(np.float32, copy=False)
+
+
+    # newly added: Print the shapes of input graphs
+    print("sourceGraph shape:", sourceGraph.shape)
+    print("targetGraph shape:", targetGraph.shape)
+
+
+
+
+    # # initialisation
+    # subject = num_subjects
+    # overallResult_PCC = np.zeros((subject,32))
+
+    # #Newly added
+    # print("overallResult_PCC shape:", overallResult_PCC.shape)
+
+    # overallResult_TSW = np.zeros((subject,32))
+    # predictedTargetGraph = np.empty((0, num_features), int)
+
+
+
+    # initialisation  24 sep
+    subject = num_subjects
+
+    # --- K sweep setup (metrics independent of K/folds) ---
+    K_MAX = min(10, subject - 1) if subject > 1 else 1
+    K_GRID = list(range(1, K_MAX + 1))
+    pcc_by_k = {k: np.full(subject, np.nan, dtype=np.float32) for k in K_GRID}
+    mae_by_k = {k: np.full(subject, np.nan, dtype=np.float32) for k in K_GRID}
+    print("K sweep grid:", K_GRID)
+    # predictions container (keep as float32)
+    predictedTargetGraph = np.empty((0, num_features), dtype=np.float32)
+   
+
+
+
+    
 
     ## STEP 1: feature extraction and clustering
     print("======SIMLR for Clustering======")
@@ -73,15 +73,63 @@ def main(sourceGraph,targetGraph,settings):
     loo.get_n_splits(sourceGraph)
 
     for train_index, test_index in loo.split(sourceGraph):
+
+        
         rearrangedPredictorView = np.concatenate((np.transpose(sourceGraph[train_index]), np.transpose(sourceGraph[test_index])),axis = 1)
         rearrangedTargetView = np.concatenate((np.transpose(targetGraph[train_index]),np.transpose(targetGraph[test_index])),axis = 1)
         
+
+
+
+
+        # label_of_test_index = y_pred[test_index[0]]
+        # train_index = get_indexes(label_of_test_index,y_pred)
+        
+        # print("Testing subject number: ", test_index[0]," of cluster ", label_of_test_index)
+        # print("Training subjects: ", len(train_index)," of cluster ", label_of_test_index)
+
+
+
+        #2 Oct
+
         label_of_test_index = y_pred[test_index[0]]
-        train_index = get_indexes(label_of_test_index,y_pred)
+        train_index = get_indexes(label_of_test_index, y_pred)
+
+        # ensure we have a valid training set for this fold 
+        # If the cluster is empty, fall back to "all except the test subject"
+        if len(train_index) == 0:
+            train_index = [i for i in range(len(y_pred)) if i != test_index[0]]
+        # If the test subject accidentally appears in the cluster list, remove it
+        elif test_index[0] in train_index:
+            train_index.remove(test_index[0])
+
+        n_train = len(train_index)
+
+        #Dynamic K per fold: at least 1, at most 5, and cannot exceed n_train-1 
+        K = 1 if n_train <= 1 else max(1, min(5, n_train - 1))
+
+        # print("Testing subject number:", test_index[0], "of cluster", label_of_test_index)
+        # print("Training subjects:", n_train, "of cluster", label_of_test_index, "| K used:", K)
+
+
+
+        # 2 oct
+        print("Testing subject number:", test_index[0], "of cluster", label_of_test_index)
+        print(
+              "Training subjects:", n_train,
+              "of cluster", label_of_test_index,
+              "| K sweep:", list(range(1, max(1, min(K_MAX, n_train - 1)) + 1))
+            )
+
+
         
-        print("Testing subject number: ", test_index[0]," of cluster ", label_of_test_index)
-        print("Training subjects: ", len(train_index)," of cluster ", label_of_test_index)
-        
+
+
+
+
+
+
+
     ## STEP 2: Domain Alignment for training samples
         simlr1 = SIMLR.SIMLR_LARGE(1, 10, 0)
         enc = Encoder(settings)
@@ -90,112 +138,404 @@ def main(sourceGraph,targetGraph,settings):
         SV = sourceGraph[train_index]
         print("Encode the target graph...")
         Simlarity2, _,_, _ = simlr1.fit(train__TV_A)
-        encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index],"No_hidden_SIMLR",1,1,1)
+        #encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index],"No_hidden_SIMLR",1,1,1)
+        #encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index], "No_hidden_SIMLR", 1, 1, 1, input_dim)
+
+
+        encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index], "No_hidden_SIMLR", targetGraph[train_index], None, None, input_dim)
+
+
         
     ## STEP 3: Dual Adversarial Regularization of source graph embedding for training and testing samples
         test__train__SV = np.vstack((sourceGraph[train_index],sourceGraph[test_index]))
         print("Encode the source view of the TRAIN subjects and the TEST subject...")
         Simlarity1, _,_, _ = simlr1.fit(test__train__SV)
-        encode_test__train__SV = enc.erun(Simlarity1, test__train__SV,"Yes_hidden_SIMLR", train__TV_A, encode_train__TV_A, rearrangedTargetView)
+        #encode_test__train__SV = enc.erun(Simlarity1, test__train__SV,"Yes_hidden_SIMLR", train__TV_A, encode_train__TV_A, rearrangedTargetView)
+        encode_test__train__SV = enc.erun(Simlarity1, test__train__SV,"Yes_hidden_SIMLR", train__TV_A, encode_train__TV_A, rearrangedTargetView, input_dim)
+
+
+
+
       
     ## Connectomic Manifold Learning using SIMLR
         SALL, FALL,val, ind = simlr1.fit(encode_test__train__SV)
         SY, FY,val, ind = simlr1.fit(encode_train__TV_A)
-        # number of neighbors for trust score
-        TS_bestNb = 5
-        # get best TS_benstNb neighbors for everyone
-        sall = SALL.todense()
+
+
+
+        #2 oct
+        # # number of neighbors for trust score
+        # TS_bestNb = 5
+
+
+
+
+        # # get best TS_benstNb neighbors for everyone
+        # sall = SALL.todense()
+        # Index_ALL = np.argsort(-sall, axis=0)
+        
+        #2 oct
+        sall = np.asarray(SALL.todense())
         Index_ALL = np.argsort(-sall, axis=0)
+
         des = np.sort(-sall, axis=0)
         Bvalue_ALL = -des
 
-        sy = SY.todense()
+        # sy = SY.todense()
+        # Index_Y = np.argsort(-sy, axis=0)
+
+
+        sy = np.asarray(SY.todense())
         Index_Y = np.argsort(-sy, axis=0)
+
+
+
         desy = np.sort(-sy,axis=0)
         Bvalue_Y = -desy
 
-        ## STEP 4: Target Graph Prediction
-        # make prediction for each testing subject
-        for testingSubject in range(1,2):
-            print "testing subject:", test_index[0]
-            # get this testing subject's rearranged index and original index
-            tSubjectIndex = (SV.shape[0]-2) + testingSubject
-            tSubjectOriginalIndex = test_index
-            # compute Tscore for each neighbor
-            trustScore = np.ones((TS_bestNb,TS_bestNb))
-            newWeight_TSW = np.ones(TS_bestNb)
 
-            for neighbor in range(0,TS_bestNb):
-                neighborIndex = Index_ALL[tSubjectIndex,neighbor]
-                temp_counter = 0
-                while (neighborIndex  > SV.shape[0]):
-                # best neighbor is a testing data 
-                    temp_counter = temp_counter + 1
-                    neighborIndex = Index_ALL[tSubjectIndex,(TS_bestNb + temp_counter)]
 
-                if (temp_counter != 0):
-                    neighborSequence = TS_bestNb + temp_counter
-                else:
-                    neighborSequence = neighbor
 
-                    print('----',neighborIndex)
-                    if (neighborIndex == Index_Y.shape[0]):
-                        continue
-                    # get top nb neighbors in mappedX
-                    neighborListX = Index_ALL[neighborIndex,0:TS_bestNb]
-                    # get top nb neighbors in mappedY
-                    neighborListY = Index_Y[neighborIndex,0:TS_bestNb]
-                    # calculate trust score
-                    trustScore[TS_bestNb-1,neighbor] = len(np.intersect1d(np.array(neighborListX),np.array(neighborListY)))
-                    # calculate new weight (TS * Similarity)
-                    newWeight_TSW[neighbor] = exp(trustScore[TS_bestNb-1,neighbor] / TS_bestNb * Bvalue_ALL[tSubjectIndex,neighborSequence])
+
+        # ## STEP 4: Target Graph Prediction
+        # # make prediction for each testing subject
+        # for testingSubject in range(1,2):
+        #     #print "testing subject:", test_index[0]
+        #     print("testing subject:", test_index[0])
+
+        #     # get this testing subject's rearranged index and original index
+        #     tSubjectIndex = (SV.shape[0]-2) + testingSubject
+        #     tSubjectOriginalIndex = test_index
+        #     # compute Tscore for each neighbor
+        #     trustScore = np.ones((TS_bestNb,TS_bestNb))
+        #     newWeight_TSW = np.ones(TS_bestNb)
+
+        #     for neighbor in range(0,TS_bestNb):
+        #         neighborIndex = Index_ALL[tSubjectIndex,neighbor]
+        #         temp_counter = 0
+        #         while (neighborIndex  > SV.shape[0]):
+        #         # best neighbor is a testing data 
+        #             temp_counter = temp_counter + 1
+        #             neighborIndex = Index_ALL[tSubjectIndex,(TS_bestNb + temp_counter)]
+
+        #         if (temp_counter != 0):
+        #             neighborSequence = TS_bestNb + temp_counter
+        #         else:
+        #             neighborSequence = neighbor
+
+        #             print('----',neighborIndex)
+        #             if (neighborIndex == Index_Y.shape[0]):
+        #                 continue
+        #             # get top nb neighbors in mappedX
+        #             neighborListX = Index_ALL[neighborIndex,0:TS_bestNb]
+        #             # get top nb neighbors in mappedY
+        #             neighborListY = Index_Y[neighborIndex,0:TS_bestNb]
+        #             # calculate trust score
+        #             trustScore[TS_bestNb-1,neighbor] = len(np.intersect1d(np.array(neighborListX),np.array(neighborListY)))
+        #             # calculate new weight (TS * Similarity)
+        #             newWeight_TSW[neighbor] = exp(trustScore[TS_bestNb-1,neighbor] / TS_bestNb * Bvalue_ALL[tSubjectIndex,neighborSequence])
                     
-            #reconstruct with Tscore and similarity weight
-            innerPredict_TSW = np.zeros(SV.shape[1])[np.newaxis]
-            #summing up the best neighbors
-            for j1 in range(0,TS_bestNb):
-                tr = (rearrangedTargetView[:,Index_ALL[tSubjectIndex,j1]])[np.newaxis]
-                if j1 == 0:
-                    innerPredict_TSW = innerPredict_TSW.T + tr.T * newWeight_TSW[j1]
-                else:
-                    innerPredict_TSW = innerPredict_TSW + tr.T * newWeight_TSW[j1]
+        #     #reconstruct with Tscore and similarity weight
+        #     innerPredict_TSW = np.zeros(SV.shape[1])[np.newaxis]
+        #     #summing up the best neighbors
+        #     for j1 in range(0,TS_bestNb):
+        #         tr = (rearrangedTargetView[:,Index_ALL[tSubjectIndex,j1]])[np.newaxis]
+        #         if j1 == 0:
+        #             innerPredict_TSW = innerPredict_TSW.T + tr.T * newWeight_TSW[j1]
+        #         else:
+        #             innerPredict_TSW = innerPredict_TSW + tr.T * newWeight_TSW[j1]
 
-            # scale weight to 1
-            Scale_TSW = sum(newWeight_TSW)
-            innerPredict_TSW = np.divide(innerPredict_TSW, Scale_TSW)
+        #     # scale weight to 1
+        #     Scale_TSW = sum(newWeight_TSW)
+        #     innerPredict_TSW = np.divide(innerPredict_TSW, Scale_TSW)
             
-            # calculate PCC and MAE
-            tr2 = (rearrangedTargetView[:,tSubjectIndex])[np.newaxis]
-            resulttsw =abs(tr2.T - innerPredict_TSW)
-            iMAE_TSW = mean_absolute_error(tr2.T, innerPredict_TSW)
-            overallResult_TSW[tSubjectOriginalIndex,TS_bestNb] = overallResult_TSW[tSubjectOriginalIndex,TS_bestNb] + iMAE_TSW
-            [r,p] = stats.pearsonr(tr2.T, innerPredict_TSW)
-            overallResult_PCC[tSubjectOriginalIndex,TS_bestNb] = overallResult_PCC[tSubjectOriginalIndex,TS_bestNb] + r
+        #     # calculate PCC and MAE
+        #     tr2 = (rearrangedTargetView[:,tSubjectIndex])[np.newaxis]
+        #     resulttsw =abs(tr2.T - innerPredict_TSW)
+        #     iMAE_TSW = mean_absolute_error(tr2.T, innerPredict_TSW)
+        #     overallResult_TSW[tSubjectOriginalIndex,TS_bestNb] = overallResult_TSW[tSubjectOriginalIndex,TS_bestNb] + iMAE_TSW
+        #     [r,p] = stats.pearsonr(tr2.T, innerPredict_TSW)
+        #     overallResult_PCC[tSubjectOriginalIndex,TS_bestNb] = overallResult_PCC[tSubjectOriginalIndex,TS_bestNb] + r
             
-            predictedTargetGraph = np.append(predictedTargetGraph, innerPredict_TSW.T, axis=0)
+        #     predictedTargetGraph = np.append(predictedTargetGraph, innerPredict_TSW.T, axis=0)
 
-            print test_index[0]
+        #     #print test_index[0]
+        #     print(test_index[0])
+
+
+
+        # # 2 oct
+
+        # ## STEP 4: Target Graph Prediction (K-sweep)
+        # for testingSubject in range(1, 2):
+        #     print("testing subject:", test_index[0])
+
+        #     # In test__train__SV = [train; test], the test row is at n_train
+        #     tSubjectIndex = n_train
+        #     tSubjectOriginalIndex = test_index[0]
+
+        #     # Feasible K for this fold
+        #     K_feasible_max = max(1, min(K_MAX, n_train - 1))
+        #     for k in range(1, K_feasible_max + 1):
+
+        #         trust_overlap = np.zeros(k, dtype=np.float32)
+        #         newWeight_TSW = np.zeros(k, dtype=np.float32)
+
+        #         for j in range(k):
+
+
+
+        #             # # while loop
+        #             # neighborIndex = Index_ALL[tSubjectIndex, j]
+
+        #             # # if neighbor points to the test row, skip forward
+        #             # temp_counter = 0
+        #             # while neighborIndex >= n_train:
+        #             #     temp_counter += 1
+        #             #     col = min(k + temp_counter, Index_ALL.shape[0] - 1)
+        #             #     neighborIndex = Index_ALL[tSubjectIndex, col]
+
+        #             # neighborSequence = min(j + temp_counter, Index_ALL.shape[0] - 1)
+        #             # # while loop
+
+
+
+        #             # 2 oct_ instead of while loop
+        #             # get more than enough candidates, filter to training, then take first k
+        #             row_sorted = Index_ALL[tSubjectIndex, :min(Index_ALL.shape[0], 2*k + 10)].ravel()
+        #             train_cands = [int(ix) for ix in row_sorted if ix < n_train]
+        #             train_cands = train_cands[:k]
+
+        #             # now iterate only real training neighbors
+        #             innerPredict_TSW = np.zeros((1, SV.shape[1]), dtype=np.float32)
+        #             newWeight_TSW = np.zeros(k, dtype=np.float32)
+
+        #             for j, neighborIndex in enumerate(train_cands):
+        #                 neighborSequence = j  # similarity lookup column; j aligns with our j-th kept neighbor
+        #                 neighborListX = Index_ALL[neighborIndex, 0:k]
+        #                 neighborListY = Index_Y[neighborIndex, 0:k]
+        #                 overlap = len(np.intersect1d(np.array(neighborListX).ravel(), np.array(neighborListY).ravel()))
+        #                 newWeight_TSW[j] = exp((overlap / float(k)) * Bvalue_ALL[tSubjectIndex, neighborSequence])
+
+        #                 idx = neighborIndex  # here idx is a train column in rearrangedTargetView
+        #                 tr = rearrangedTargetView[:, idx].reshape(1, -1)
+        #                 innerPredict_TSW += tr * newWeight_TSW[j]
+
+
+
+
+
+
+
+        #             # bounds for Index_Y
+        #             if neighborIndex >= Index_Y.shape[0]:
+        #                 continue
+
+        #             # top-k lists in source/target manifolds
+        #             neighborListX = Index_ALL[neighborIndex, 0:k]
+        #             neighborListY = Index_Y[neighborIndex, 0:k]
+
+        #             # trust = size of overlap of K-NN in the two spaces
+        #             overlap = len(np.intersect1d(np.array(neighborListX).ravel(),
+        #                                          np.array(neighborListY).ravel()))
+        #             trust_overlap[j] = overlap
+
+        #             # weight = exp( (trust/k) * similarity )
+        #             newWeight_TSW[j] = exp((overlap / float(k)) * Bvalue_ALL[tSubjectIndex, neighborSequence])
+
+        #         # if all weights are zero (degenerate small-N), use uniform
+        #         if np.all(newWeight_TSW == 0):
+        #             newWeight_TSW[:] = 1.0
+
+
+
+
+        #         # # reconstruct with trust/similarity weights
+        #         # innerPredict_TSW = np.zeros(SV.shape[1], dtype=np.float32)[np.newaxis, :]
+        #         # for j in range(k):
+        #         #     idx = Index_ALL[tSubjectIndex, j]
+        #         #     # avoid selecting the test column itself
+        #         #     if idx >= rearrangedTargetView.shape[1] - 1:
+        #         #         continue
+        #         #     tr = (rearrangedTargetView[:, idx])[np.newaxis, :]
+        #         #     if j == 0:
+        #         #         innerPredict_TSW = innerPredict_TSW.T + tr.T * newWeight_TSW[j]
+        #         #     else:
+        #         #         innerPredict_TSW = innerPredict_TSW + tr.T * newWeight_TSW[j]
+
+
+
+        #         # 2 oct
+        #         innerPredict_TSW = np.zeros((1, SV.shape[1]), dtype=np.float32)
+        #         for j in range(k):
+        #             idx = int(Index_ALL[tSubjectIndex, j])
+        #             if idx >= rearrangedTargetView.shape[1] - 1:
+        #                 continue
+        #             tr = rearrangedTargetView[:, idx].reshape(1, -1)  # (1, num_features)
+        #             innerPredict_TSW += tr * newWeight_TSW[j]
+
+
+
+
+
+        #             # explanation: Now innerPredict_TSW stays (1, num_features) the whole time, so later lines work as-is:
+
+        #             # innerPredict_TSW = innerPredict_TSW / max(1.0, float(np.sum(newWeight_TSW)))
+        #             # y = innerPredict_TSW.ravel()
+        #             # predictedTargetGraph = np.append(predictedTargetGraph, innerPredict_TSW, axis=0)
+
+
+
+        #         Scale_TSW = float(np.sum(newWeight_TSW))
+        #         if Scale_TSW == 0:
+        #             Scale_TSW = 1.0
+        #         innerPredict_TSW = np.divide(innerPredict_TSW, Scale_TSW)
+
+        #         # metrics (guard constant vectors for Pearson)
+        #         tr2 = (rearrangedTargetView[:, tSubjectIndex])[np.newaxis, :]
+        #         x = tr2.T.ravel()
+        #         y = innerPredict_TSW.ravel()
+
+        #         if np.std(x) == 0 or np.std(y) == 0:
+        #             r = 0.0
+        #         else:
+        #             r, p = stats.pearsonr(x, y)
+        #         iMAE_TSW = mean_absolute_error(x, y)
+
+        #         # record into per-K containers (from Step 1)
+        #         pcc_by_k[k][tSubjectOriginalIndex] = r
+        #         mae_by_k[k][tSubjectOriginalIndex] = iMAE_TSW
+
+        #     # keep a single predictions array (last k’s prediction)
+        #     predictedTargetGraph = np.append(predictedTargetGraph, innerPredict_TSW, axis=0)
+        #     print(test_index[0])
+
+
+
+        
+
+
+
+        # 2 oct
+
+        ## STEP 4: Target Graph Prediction (K-sweep)
+        for testingSubject in range(1, 2):
+            print("testing subject:", test_index[0])
+
+            # In test__train__SV = [train; test], the test row is at n_train
+            tSubjectIndex = n_train
+            tSubjectOriginalIndex = test_index[0]
+
+            # Feasible K for this fold
+            K_feasible_max = max(1, min(K_MAX, n_train - 1))
+            for k in range(1, K_feasible_max + 1):
+                # 1) Candidate neighbors for the test node (take >k, then filter to training rows)
+                row_sorted = np.asarray(Index_ALL[tSubjectIndex, :min(Index_ALL.shape[0], 2*k + 10)]).ravel()
+                train_cands = [int(ix) for ix in row_sorted if ix < n_train][:k]
+
+                # 2) Weights and reconstruction accumulator
+                newWeight_TSW = np.zeros(len(train_cands), dtype=np.float32)
+                innerPredict_TSW = np.zeros((1, SV.shape[1]), dtype=np.float32)
+
+                # 3) Trust-weighted similarity and reconstruction
+                for j, neighborIndex in enumerate(train_cands):
+                    # top-k lists for this neighbor in both manifolds
+                    neighborListX = np.asarray(Index_ALL[neighborIndex, 0:k]).ravel()
+                    neighborListY = np.asarray(Index_Y[neighborIndex, 0:k]).ravel()
+                    overlap = len(np.intersect1d(neighborListX, neighborListY))
+
+                    # similarity term from Bvalue_ALL; j is our kept-neighbor rank
+                    newWeight_TSW[j] = exp((overlap / float(k)) * Bvalue_ALL[tSubjectIndex, j])
+
+                    # add this neighbor's target vector
+                    tr = rearrangedTargetView[:, neighborIndex].reshape(1, -1)  # (1, num_features)
+                    innerPredict_TSW += tr * newWeight_TSW[j]
+
+                # 4) Normalize (guard zero)
+                Scale_TSW = float(np.sum(newWeight_TSW))
+                innerPredict_TSW = innerPredict_TSW / (Scale_TSW if Scale_TSW > 0 else 1.0)
+
+                # 5) Metrics (flatten to 1-D; guard constant vectors)
+                x = rearrangedTargetView[:, tSubjectIndex].ravel()
+                y = innerPredict_TSW.ravel()
+                r = 0.0 if (np.std(x) == 0 or np.std(y) == 0) else stats.pearsonr(x, y)[0]
+                iMAE_TSW = mean_absolute_error(x, y)
+
+                # 6) Record per-K results (from your Step 1 dicts)
+                pcc_by_k[k][tSubjectOriginalIndex] = r
+                mae_by_k[k][tSubjectOriginalIndex] = iMAE_TSW
+
+            # (Optional) keep last-k prediction in a flat array
+            predictedTargetGraph = np.append(predictedTargetGraph, innerPredict_TSW, axis=0)
+            print(test_index[0])
+
+
+
+
+
+
+
+
+
             
-            
-    pcc = np.mean(overallResult_PCC,axis=0)
-    print("Pearson Correlation Coefficient: ", pcc)
-    mae = np.mean(overallResult_TSW,axis=0)
-    print("Mean Absolute Error: ", mae)
+    # pcc = np.mean(overallResult_PCC,axis=0)
+    # print("Pearson Correlation Coefficient: ", pcc)
+    # mae = np.mean(overallResult_TSW,axis=0)
+    # print("Mean Absolute Error: ", mae)
+
+
+    # --- 24 sep
+    pcc_mean_by_k = {k: float(np.nanmean(pcc_by_k[k])) for k in K_GRID}
+    mae_mean_by_k = {k: float(np.nanmean(mae_by_k[k])) for k in K_GRID}
+    print("PCC by K (LOOCV mean):", pcc_mean_by_k)
+    print("MAE by K (LOOCV mean):", mae_mean_by_k)
+
+
+
+
      
     
     return predictedTargetGraph
 
-           
+
+num_subjects = 150
+num_features = 35 * 35  
+
+
 ## Simulate graph data for simply running the code
 ## in this exemple, the source and target matrices have different statistical distributions
 mu, sigma = 0.2226636809, 0.02720207221 # mean and standard deviation
-sourceGraph = np.random.normal(mu, sigma, (150,595))
+sourceGraph = np.random.normal(mu, sigma, (num_subjects, num_features))
+print("SourceGraph shape:", sourceGraph.shape)
+
+
 mu, sigma = 0.0830806568, 0.01338490182
-targetGraph = np.random.normal(mu, sigma, (150,595))
+targetGraph = np.random.normal(mu, sigma, (num_subjects, num_features))
+print("TargetGraph shape:", targetGraph.shape)
+
+#newly added
+input_dim = sourceGraph.shape[1]
+print("Input dimension:", input_dim)   
 
 model = 'arga_ae' #autoencoder/variational autoencoder
 settings = settings.get_settings_new(model)
-predicted_target_graphs = main(sourceGraph, targetGraph, settings)
+predicted_target_graphs = main(sourceGraph, targetGraph, settings, num_subjects, num_features)
+print("Predicted target graph shape!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!:", predicted_target_graphs.shape)
+
+
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  shape
+
+
+# #To print from model.py !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# h1_shape, emb_shape, rec_shape = sess.run(
+#     [model.hidden1_shape, model.embedding_shape, model.recon_shape],
+#     feed_dict=feed_dict
+# )
+# print("ARGA Hidden1 shape:", h1_shape)
+# print("ARGA Embeddings (Z) shape:", emb_shape)
+# print("ARGA Reconstructions shape:", rec_shape)
+
+
 
 
 end = time.time()
