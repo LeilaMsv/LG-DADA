@@ -13,6 +13,59 @@ from sklearn.model_selection import LeaveOneOut
 from sklearn.metrics import mean_absolute_error
 
 
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+import scipy.sparse as sp
+
+
+
+
+# 8 Oct
+def _force_simlr_k(simlr_obj, n, k_min=2):
+    """Force k-like attributes on a SIMLR object to a safe value for this X with n rows."""
+    k_eff = int(max(k_min, min(n - 1, n // 2)))  # practical rule
+    for attr in ("k", "K", "n_neighbors", "num_neighbors", "nn", "knn", "knn_k", "kNN"):
+        if hasattr(simlr_obj, attr):
+            try:
+                setattr(simlr_obj, attr, k_eff)
+            except Exception:
+                pass
+    return k_eff
+
+
+def _try_fit_or_pca(simlr_obj, X, n_clusters, pca_dim=50, seed=0):
+
+    """Try SIMLR.fit(X); if it still dies (hard-coded k=100), fall back to PCA+KMeans.
+    Returns (S, F, y_pred). S or F may be None in the PCA fallback."""
+    try:
+        S, F, val, ind = simlr_obj.fit(X)
+        # SIMLR success
+        y_pred = simlr_obj.fast_minibatch_kmeans(F, n_clusters)
+        return S, F, y_pred
+    except Exception as e:
+        print("[SIMLR fallback] using PCA+KMeans due to:", repr(e))
+        d = max(2, min(pca_dim, X.shape[1], X.shape[0]-1))
+        Xred = PCA(n_components=d, svd_solver='randomized', random_state=seed).fit_transform(X)
+        y_pred = KMeans(n_clusters=n_clusters, n_init=10, random_state=seed).fit_predict(Xred)
+        # No SIMLR S/F available in this path
+        return None, Xred, y_pred
+
+def _safe_affinity(X):
+    """Cosine similarity fallback to mimic SIMLR’s S matrix."""
+    S = cosine_similarity(X)
+    np.fill_diagonal(S, 0.0)   # don’t self-count
+    return S.astype(np.float32, copy=False)
+
+
+def _simlr_fit(simlr_obj, X, k_min=2):
+    """Force k based on X, then call .fit(X)."""
+    _force_simlr_k(simlr_obj, X.shape[0], k_min=k_min)
+    return simlr_obj.fit(X)
+
+
+
+
 start = time.time()
 
 def main(sourceGraph,targetGraph,settings, num_subjects, num_features):
@@ -60,12 +113,79 @@ def main(sourceGraph,targetGraph,settings, num_subjects, num_features):
 
     ## STEP 1: feature extraction and clustering
     print("======SIMLR for Clustering======")
-    c = 2
-    simlr = SIMLR.SIMLR_LARGE(c, 50, 0)
-    S, F, val, ind = simlr.fit(sourceGraph)
-    y_pred = simlr.fast_minibatch_kmeans(F,c)
+
+
+    # c = 2
+    # simlr = SIMLR.SIMLR_LARGE(c, 50, 0)
+    # S, F, val, ind = simlr.fit(sourceGraph)
+
+    # # 6 OCT
+    # c = 2
+    # N_total = sourceGraph.shape[0]
+    # K_min = 2
+    # K_simlr0 = max(K_min, (N_total - 1) // 2)
+    # K_simlr0 = min(K_simlr0, N_total - 1)
+    # simlr = SIMLR.SIMLR_LARGE(c, 50, K_simlr0)
+    # S, F, val, ind = simlr.fit(sourceGraph)
+
+
+
+
+    # # 6 OCT
+
+    # c = 2
+    # N_total = sourceGraph.shape[0]
+    # K_min = 2
+    # K_simlr0 = max(K_min, (N_total - 1) // 2)
+    # K_simlr0 = min(K_simlr0, N_total - 1)
+
+
+
+
+    # simlr = SIMLR.SIMLR_LARGE(c, 50, K_simlr0)
+
+
+    # # --- force k on the instance (some SIMLR versions ignore ctor arg) ---
+    # k_eff = int(K_simlr0)
+    # for attr in ("k", "K", "n_neighbors", "nn", "kNN", "knn", "knn_k"):
+    #     if hasattr(simlr, attr):
+    #         setattr(simlr, attr, k_eff)
+    # # --------------------------------------------------------------------
     
+    
+    # S, F, val, ind = simlr.fit(sourceGraph)
+
+
+    # y_pred = simlr.fast_minibatch_kmeans(F,c)
+    
+    # y_pred = y_pred.tolist()
+
+
+
+
+
+
+
+
+
+    # 8 Oct
+    c = 2
+    simlr = SIMLR.SIMLR_LARGE(c, 50, 0)  # ctor arg isn’t trusted by this SIMLR version
+    # try SIMLR; if it fails, use PCA+KMeans just to get y_pred
+    S, F, y_pred = _try_fit_or_pca(simlr, sourceGraph, n_clusters=c, pca_dim=50, seed=0)
     y_pred = y_pred.tolist()
+
+
+
+
+
+
+
+
+
+
+
+
     get_indexes = lambda x, xs: [i for (y, i) in zip(xs, range(len(xs))) if x == y]
 
     # Split the data into training and testing sets
@@ -131,67 +251,221 @@ def main(sourceGraph,targetGraph,settings, num_subjects, num_features):
 
 
     ## STEP 2: Domain Alignment for training samples
-        simlr1 = SIMLR.SIMLR_LARGE(1, 10, 0)
+
+
+        #simlr1 = SIMLR.SIMLR_LARGE(1, 10, 0)
+
+
+        # # 6 OCT
+        # # neighbors for fold's SIMLR
+        # K_min = 2
+        # K_simlr_fold = max(K_min, n_train // 2)
+        # K_simlr_fold = min(K_simlr_fold, n_train)   # cap to available train rows
+        # simlr1 = SIMLR.SIMLR_LARGE(1, 10, K_simlr_fold)
+
+
+        # 6 OCT
+
+        K_min = 2
+        K_simlr_fold = max(K_min, n_train // 2)
+        K_simlr_fold = min(K_simlr_fold, max(1, n_train - 1))  # ≤ n_train-1
+
+        simlr1 = SIMLR.SIMLR_LARGE(1, 10, K_simlr_fold)
+        # --- force k on the instance ---
+        k_eff_fold = int(K_simlr_fold)
+        for attr in ("k", "K", "n_neighbors", "nn", "kNN", "knn", "knn_k"):
+            if hasattr(simlr1, attr):
+                setattr(simlr1, attr, k_eff_fold)
+        # --------------------------------
+
+
+
+        
+
+
+
         enc = Encoder(settings)
     
         train__TV_A = targetGraph[train_index]
         SV = sourceGraph[train_index]
+
+
+
+
+
+        # print("Encode the target graph...")
+
+
+        # #Simlarity2, _,_, _ = simlr1.fit(train__TV_A)
+
+
+        # # 8 Oct
+        # try:
+        #     _ = simlr1.fit(train__TV_A)
+        # except Exception as e:
+        #     print("[SIMLR warn] fit(train__TV_A) failed; will use fallback sims later:", repr(e))
+
+
+
+
+        # #encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index],"No_hidden_SIMLR",1,1,1)
+        # #encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index], "No_hidden_SIMLR", 1, 1, 1, input_dim)
+
+
+        # encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index], "No_hidden_SIMLR", targetGraph[train_index], None, None, input_dim)
+
+
+
+
+        # 8 OCt
         print("Encode the target graph...")
-        Simlarity2, _,_, _ = simlr1.fit(train__TV_A)
-        #encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index],"No_hidden_SIMLR",1,1,1)
-        #encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index], "No_hidden_SIMLR", 1, 1, 1, input_dim)
+        try:
+            Simlarity2, _, _, _ = simlr1.fit(train__TV_A)
+        except Exception as e:
+            print("[SIMLR fallback] Simlarity2 via cosine_similarity due to:", repr(e))
+            S2 = _safe_affinity(train__TV_A)     # dense cosine affinity with zeroed diagonal
+            Simlarity2 = sp.csr_matrix(S2)       # make it sparse for encoder.format_data_new
+
+        encode_train__TV_A = enc.erun(
+           Simlarity2,
+            sourceGraph[train_index],
+            "No_hidden_SIMLR",
+            targetGraph[train_index],
+            None,
+            None,
+            input_dim
+        )
 
 
-        encode_train__TV_A = enc.erun(Simlarity2, sourceGraph[train_index], "No_hidden_SIMLR", targetGraph[train_index], None, None, input_dim)
+
+
+
+
 
 
         
     ## STEP 3: Dual Adversarial Regularization of source graph embedding for training and testing samples
         test__train__SV = np.vstack((sourceGraph[train_index],sourceGraph[test_index]))
+
+
+
+
+
+        # print("Encode the source view of the TRAIN subjects and the TEST subject...")
+
+
+        # #Simlarity1, _,_, _ = simlr1.fit(test__train__SV)
+
+
+        # # 8 Oct
+        # try:
+        #     _ = simlr1.fit(test__train__SV)
+        # except Exception as e:
+        #     print("[SIMLR warn] fit(test__train__SV) failed; will use fallback sims later:", repr(e))
+
+
+
+        # #encode_test__train__SV = enc.erun(Simlarity1, test__train__SV,"Yes_hidden_SIMLR", train__TV_A, encode_train__TV_A, rearrangedTargetView)
+        # encode_test__train__SV = enc.erun(Simlarity1, test__train__SV,"Yes_hidden_SIMLR", train__TV_A, encode_train__TV_A, rearrangedTargetView, input_dim)
+
+
+
+        # 8 OCT
         print("Encode the source view of the TRAIN subjects and the TEST subject...")
-        Simlarity1, _,_, _ = simlr1.fit(test__train__SV)
-        #encode_test__train__SV = enc.erun(Simlarity1, test__train__SV,"Yes_hidden_SIMLR", train__TV_A, encode_train__TV_A, rearrangedTargetView)
-        encode_test__train__SV = enc.erun(Simlarity1, test__train__SV,"Yes_hidden_SIMLR", train__TV_A, encode_train__TV_A, rearrangedTargetView, input_dim)
+        try:
+            Simlarity1, _, _, _ = simlr1.fit(test__train__SV)
+        except Exception as e:
+            print("[SIMLR fallback] Simlarity1 via cosine_similarity due to:", repr(e))
+            S1 = _safe_affinity(test__train__SV)  # dense cosine affinity with zeroed diagonal
+            Simlarity1 = sp.csr_matrix(S1)        # make it sparse
+
+        encode_test__train__SV = enc.erun(
+            Simlarity1,
+            test__train__SV,
+            "Yes_hidden_SIMLR",
+            train__TV_A,
+            encode_train__TV_A,
+            rearrangedTargetView,
+            input_dim
+        )  
+
+
+
+
 
 
 
 
       
-    ## Connectomic Manifold Learning using SIMLR
-        SALL, FALL,val, ind = simlr1.fit(encode_test__train__SV)
-        SY, FY,val, ind = simlr1.fit(encode_train__TV_A)
+    # ## Connectomic Manifold Learning using SIMLR
+    #     SALL, FALL,val, ind = simlr1.fit(encode_test__train__SV)
+    #     SY, FY,val, ind = simlr1.fit(encode_train__TV_A)
 
 
 
-        #2 oct
-        # # number of neighbors for trust score
-        # TS_bestNb = 5
+    #     #2 oct
+    #     # # number of neighbors for trust score
+    #     # TS_bestNb = 5
 
 
 
 
-        # # get best TS_benstNb neighbors for everyone
-        # sall = SALL.todense()
-        # Index_ALL = np.argsort(-sall, axis=0)
+    #     # # get best TS_benstNb neighbors for everyone
+    #     # sall = SALL.todense()
+    #     # Index_ALL = np.argsort(-sall, axis=0)
         
-        #2 oct
-        sall = np.asarray(SALL.todense())
-        Index_ALL = np.argsort(-sall, axis=0)
+    #     #2 oct
+    #     sall = np.asarray(SALL.todense())
+    #     Index_ALL = np.argsort(-sall, axis=0)
 
-        des = np.sort(-sall, axis=0)
-        Bvalue_ALL = -des
+    #     des = np.sort(-sall, axis=0)
+    #     Bvalue_ALL = -des
 
-        # sy = SY.todense()
-        # Index_Y = np.argsort(-sy, axis=0)
-
-
-        sy = np.asarray(SY.todense())
-        Index_Y = np.argsort(-sy, axis=0)
+    #     # sy = SY.todense()
+    #     # Index_Y = np.argsort(-sy, axis=0)
 
 
+    #     sy = np.asarray(SY.todense())
+    #     Index_Y = np.argsort(-sy, axis=0)
 
-        desy = np.sort(-sy,axis=0)
-        Bvalue_Y = -desy
+
+
+    #     desy = np.sort(-sy,axis=0)
+    #     Bvalue_Y = -desy
+
+
+
+    # 8 OCt
+    
+
+    # SALL (neighbors on [train; test] encoded source)
+        try:
+            SALL, _, _, _ = simlr1.fit(encode_test__train__SV)
+            sall = np.asarray(SALL.todense())
+        except Exception as e:
+            print("[SIMLR fallback] SALL via cosine_similarity due to:", repr(e))
+            sall = cosine_similarity(encode_test__train__SV)
+            np.fill_diagonal(sall, 0.0)
+
+        # SY (neighbors on encoded target of train)
+        try:
+            SY, _, _, _ = simlr1.fit(encode_train__TV_A)
+            sy = np.asarray(SY.todense())
+        except Exception as e:
+            print("[SIMLR fallback] SY via cosine_similarity due to:", repr(e))
+            sy = cosine_similarity(encode_train__TV_A)
+            np.fill_diagonal(sy, 0.0)
+
+        # Build neighbor ranks ROW-WISE (axis=1) and positive weights
+        Index_ALL = np.argsort(-sall, axis=1)
+        Bvalue_ALL = -np.sort(-sall, axis=1)
+
+        Index_Y   = np.argsort(-sy,   axis=1)
+        Bvalue_Y  = -np.sort(-sy,  axis=1)
+
+
+
+
 
 
 
@@ -430,7 +704,14 @@ def main(sourceGraph,targetGraph,settings, num_subjects, num_features):
             K_feasible_max = max(1, min(K_MAX, n_train - 1))
             for k in range(1, K_feasible_max + 1):
                 # 1) Candidate neighbors for the test node (take >k, then filter to training rows)
-                row_sorted = np.asarray(Index_ALL[tSubjectIndex, :min(Index_ALL.shape[0], 2*k + 10)]).ravel()
+                #row_sorted = np.asarray(Index_ALL[tSubjectIndex, :min(Index_ALL.shape[0], 2*k + 10)]).ravel()
+
+                # 8 OCT
+                row_sorted = np.asarray(Index_ALL[tSubjectIndex, :min(Index_ALL.shape[1], 2*k + 10)]).ravel()
+
+
+
+                
                 train_cands = [int(ix) for ix in row_sorted if ix < n_train][:k]
 
                 # 2) Weights and reconstruction accumulator
@@ -498,7 +779,7 @@ def main(sourceGraph,targetGraph,settings, num_subjects, num_features):
     return predictedTargetGraph
 
 
-num_subjects = 150
+num_subjects = 50
 num_features = 35 * 35  
 
 

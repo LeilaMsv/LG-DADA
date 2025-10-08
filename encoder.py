@@ -10,6 +10,8 @@ from math import exp
 import numpy as np
 import SIMLR
 import os
+from sklearn.metrics.pairwise import cosine_similarity
+
 
 # Train on CPU (hide GPU) due to memory constraints
 os.environ['CUDA_VISIBLE_DEVICES'] = ""
@@ -166,8 +168,43 @@ class Encoder():
         # For very small n_train, there are no neighbors – fall back to identity
         if n_train <= 1:
             return original_train_TV.astype(np.float32, copy=False)
+        
 
-        simlr = SIMLR.SIMLR_LARGE(1, 10, 0)
+
+
+        #simlr = SIMLR.SIMLR_LARGE(1, 10, 0)
+
+        # # 6 oct
+        # # Use inner train size (n_train) to set SIMLR neighbors safely
+        # inner_total = emb.shape[0]          # n_train + 1 (inner test is appended)
+        # inner_train_count = inner_total - 1 # n_train
+        # K_min = 2
+        # K_simlr_inner = max(K_min, inner_train_count // 2)
+        # K_simlr_inner = min(K_simlr_inner, inner_train_count)
+        # simlr = SIMLR.SIMLR_LARGE(1, 10, K_simlr_inner)
+
+
+
+        # 6 oct
+
+        K_min = 2
+        K_simlr_fold = max(K_min, n_train // 2)
+        K_simlr_fold = min(K_simlr_fold, max(1, n_train - 1))  # ≤ n_train-1
+
+        simlr1 = SIMLR.SIMLR_LARGE(1, 10, K_simlr_fold)
+        # --- force k on the instance ---
+        k_eff_fold = int(K_simlr_fold)
+        for attr in ("k", "K", "n_neighbors", "nn", "kNN", "knn", "knn_k"):
+            if hasattr(simlr1, attr):
+                setattr(simlr1, attr, k_eff_fold)
+        # --------------------------------
+
+
+        
+
+
+
+
 
         # We will build a prediction for each training subject via inner LOOCV:
         #   hold out one training subject as "inner test", fit SIMLR on the rest,
@@ -187,20 +224,58 @@ class Encoder():
             # Target-view for inner train (kept rows)
             inner_tv  = ztrTV[inner_keep, :]
 
-            # Fit SIMLR on inner spaces
-            SALL, _, _, _ = simlr.fit(inner_emb)
-            SY,   _, _, _ = simlr.fit(inner_tv)
 
-            # Convert to ndarray to avoid np.matrix quirks
-            sall = np.asarray(SALL.todense())
-            sy   = np.asarray(SY.todense())
 
-            Index_ALL = np.argsort(-sall, axis=0)
-            Index_Y   = np.argsort(-sy,   axis=0)
 
-            # Positive similarity values for weighting
-            des = np.sort(-sall, axis=0)
-            Bvalue_ALL = -des
+            # # Fit SIMLR on inner spaces
+            # SALL, _, _, _ = simlr.fit(inner_emb)
+            # SY,   _, _, _ = simlr.fit(inner_tv)
+
+            # # Convert to ndarray to avoid np.matrix quirks
+            # sall = np.asarray(SALL.todense())
+            # sy   = np.asarray(SY.todense())
+
+            # Index_ALL = np.argsort(-sall, axis=0)
+            # Index_Y   = np.argsort(-sy,   axis=0)
+
+            # # Positive similarity values for weighting
+            # des = np.sort(-sall, axis=0)
+            # Bvalue_ALL = -des
+
+
+
+            # 8 Oct
+            # Fit SIMLR on inner spaces (fallback to cosine similarity for small N)
+            try:
+                SALL, _, _, _ = simlr.fit(inner_emb)
+                sall = np.asarray(SALL.todense())
+            except Exception as e:
+                print("[SIMLR fallback @encoder] SALL via cosine_similarity due to:", repr(e))
+                sall = cosine_similarity(inner_emb)
+                np.fill_diagonal(sall, 0.0)
+
+            try:
+                SY, _, _, _ = simlr.fit(inner_tv)
+                sy = np.asarray(SY.todense())
+            except Exception as e:
+                print("[SIMLR fallback @encoder] SY via cosine_similarity due to:", repr(e))
+                sy = cosine_similarity(inner_tv)
+                np.fill_diagonal(sy, 0.0)
+
+            # Row-wise neighbors (consistent with demo.py fallback)
+            Index_ALL = np.argsort(-sall, axis=1)
+            Index_Y   = np.argsort(-sy,   axis=1)
+            Bvalue_ALL = -np.sort(-sall, axis=1)
+
+
+
+
+
+
+
+
+
+
 
             # In inner_emb, the "test" row is last
             tSubjectIndex = inner_emb.shape[0] - 1  # equals len(inner_keep)
@@ -214,10 +289,27 @@ class Encoder():
 
             k = max(1, min(5, inner_train_count - 1)) if inner_train_count > 1 else 1
 
-            # Candidate neighbors for the inner test (grab >k, then filter to inner training rows)
-            row_sorted = np.asarray(Index_ALL[tSubjectIndex, :min(Index_ALL.shape[0], 2*k + 10)]).ravel()
-            # Keep only indices < inner_train_count (these are the inner train rows)
+
+
+
+            # # Candidate neighbors for the inner test (grab >k, then filter to inner training rows)
+            # row_sorted = np.asarray(Index_ALL[tSubjectIndex, :min(Index_ALL.shape[0], 2*k + 10)]).ravel()
+            # # Keep only indices < inner_train_count (these are the inner train rows)
+            # inner_train_cands = [int(ix) for ix in row_sorted if ix < inner_train_count][:k]
+
+
+
+            #8 OCT
+            row_sorted = np.asarray(Index_ALL[tSubjectIndex, :min(Index_ALL.shape[1], 2*k + 10)]).ravel()
             inner_train_cands = [int(ix) for ix in row_sorted if ix < inner_train_count][:k]
+
+
+
+
+
+
+
+
 
             # If we somehow have no candidates, just copy the original row
             if len(inner_train_cands) == 0:
